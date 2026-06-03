@@ -37,16 +37,15 @@ class ApiException implements Exception {
 
 // ── Interceptors ─────────────────────────────────────────────────────────────
 
-/// Injects Authorization: Bearer <token> on every outgoing request.
+/// Injects `Authorization: Bearer <token>` on every outgoing request.
 /// On 401 response: clears stored token and signals logout.
 ///
 /// With 24h tokens, mid-SOS expiry cannot occur during a single incident.
 /// Logout on 401 is the correct and safe response.
 class JwtInterceptor extends Interceptor {
   final TokenStore _tokenStore;
-  final Ref _ref;
 
-  JwtInterceptor(this._tokenStore, this._ref);
+  JwtInterceptor(this._tokenStore);
 
   @override
   void onRequest(
@@ -169,7 +168,7 @@ Dio buildDioClient(TokenStore tokenStore, Ref ref) {
   // detected before JwtInterceptor reads secure storage (I/O cost).
   dio.interceptors.addAll([
     ConnectivityInterceptor(),
-    JwtInterceptor(tokenStore, ref),
+    JwtInterceptor(tokenStore),
     ErrorNormalizerInterceptor(),
     if (AppConfig.current.isDev)
       PrettyDioLogger(

@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'app_router.dart';
 
@@ -5,7 +6,7 @@ import 'app_router.dart';
 ///
 /// Called on every route change. Returns null to allow, or a path to redirect.
 /// Guards are evaluated in order; first match wins.
-Future<String?> routeGuard(context, GoRouterState state) async {
+Future<String?> routeGuard(BuildContext context, GoRouterState state) async {
   final location = state.uri.path;
 
   // ── Public routes — always allow ────────────────────────────────────────────
