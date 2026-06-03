@@ -28,3 +28,6 @@
 
 # permission_handler
 -keep class com.baseflow.permissionhandler.** { *; }
+
+# Flutter Deferred Components (Missing classes during R8 minify)
+-dontwarn com.google.android.play.core.**
