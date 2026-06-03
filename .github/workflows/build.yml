@@ -1,0 +1,154 @@
+name: 🚀 Flutter APK Build
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*.*.*'          # triggers a GitHub Release on version tags
+  pull_request:
+    branches: [main]
+  workflow_dispatch:      # manual trigger from GitHub Actions tab
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'release'
+        type: choice
+        options: [release, debug]
+
+# ── Cancel in-flight runs when a new commit is pushed ────────────────────────
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_apk:
+    name: Build APK (${{ github.event.inputs.build_type || 'release' }})
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Frontend   # monorepo — all Flutter commands run here
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Java (required by Android Gradle) ─────────────────────────────────
+      - name: ☕ Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '17'
+
+      # ── 3. Flutter SDK ────────────────────────────────────────────────────────
+      - name: 🐦 Setup Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # ── 4. Pub cache ──────────────────────────────────────────────────────────
+      - name: 📦 Restore pub cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            Frontend/.dart_tool
+          key: pub-${{ runner.os }}-${{ hashFiles('Frontend/pubspec.yaml') }}
+          restore-keys: pub-${{ runner.os }}-
+
+      # ── 5. Install dependencies ───────────────────────────────────────────────
+      - name: 📦 flutter pub get
+        run: flutter pub get
+
+      # ── 6. Code generation (Freezed, Retrofit, Drift, json_serializable) ──────
+      - name: ⚙️ Run build_runner (code generation)
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      # ── 7. Lint ───────────────────────────────────────────────────────────────
+      - name: 🔍 flutter analyze
+        run: flutter analyze --no-fatal-infos
+
+      # ── 8. Unit tests ─────────────────────────────────────────────────────────
+      - name: 🧪 flutter test
+        run: flutter test --no-pub
+
+      # ── 9a. Build RELEASE APK (universal + per-ABI splits) ────────────────────
+      - name: 🏗️ Build Release APK
+        if: ${{ github.event.inputs.build_type != 'debug' }}
+        run: |
+          flutter build apk --release --split-per-abi
+          # Also build the universal APK
+          flutter build apk --release
+
+      # ── 9b. Build DEBUG APK (when manually requested) ─────────────────────────
+      - name: 🏗️ Build Debug APK
+        if: ${{ github.event.inputs.build_type == 'debug' }}
+        run: flutter build apk --debug
+
+      # ── 10. Collect APK paths ─────────────────────────────────────────────────
+      - name: 📋 List built APKs
+        run: find build/app/outputs/flutter-apk -name "*.apk" | sort
+
+      # ── 11. Upload all APKs as workflow artifacts ─────────────────────────────
+      - name: 📤 Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: RoadSoS-APK-${{ github.sha }}
+          path: |
+            Frontend/build/app/outputs/flutter-apk/app-release.apk
+            Frontend/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            Frontend/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+            Frontend/build/app/outputs/flutter-apk/app-x86_64-release.apk
+            Frontend/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: warn
+          retention-days: 30
+
+  # ── GitHub Release (only on version tags like v1.0.0) ─────────────────────
+  release:
+    name: 🎉 Create GitHub Release
+    needs: build_apk
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: 📥 Download APK artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: RoadSoS-APK-${{ github.sha }}
+          path: apks/
+
+      - name: 📋 List downloaded files
+        run: ls -lh apks/
+
+      - name: 🚀 Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: RoadSoS ${{ github.ref_name }}
+          body: |
+            ## 🚑 RoadSoS ${{ github.ref_name }}
+
+            ### Downloads
+            | APK | Architecture | Use for |
+            |-----|-------------|---------|
+            | `app-arm64-v8a-release.apk` | arm64-v8a | Modern Android phones (2018+) ✅ Recommended |
+            | `app-armeabi-v7a-release.apk` | armeabi-v7a | Older 32-bit Android devices |
+            | `app-x86_64-release.apk` | x86_64 | Android emulators |
+            | `app-release.apk` | Universal | All devices (largest file) |
+
+            ### Install
+            1. Download the APK for your device
+            2. Enable **Install unknown apps** in Android Settings
+            3. Open the APK to install
+
+            ---
+            Built from commit ${{ github.sha }}
+          files: |
+            apks/app-release.apk
+            apks/app-arm64-v8a-release.apk
+            apks/app-armeabi-v7a-release.apk
+            apks/app-x86_64-release.apk
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+          token: ${{ secrets.GITHUB_TOKEN }}
