@@ -1,0 +1,34 @@
+# ── Python / Backend ─────────────────────────────────────────────────────────
+.env
+.env.*
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+*.log
+
+# ── Flutter / Dart ────────────────────────────────────────────────────────────
+Frontend/.dart_tool/
+Frontend/build/
+Frontend/.flutter-plugins
+Frontend/.flutter-plugins-dependencies
+Frontend/.packages
+Frontend/pubspec.lock
+
+# ── IDEs ─────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.iml
+
+# ── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Secrets / keys ───────────────────────────────────────────────────────────
+*.pem
+*.p12
+google-services.json
+GoogleService-Info.plist

@@ -1,0 +1,130 @@
+from __future__ import annotations
+
+import hashlib
+import hmac as _hmac
+import logging
+import secrets
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
+from app.core.security import create_access_token, get_current_user, get_password_hash, verify_password
+from app.db.session import get_db
+from app.models.user import User
+from app.schemas.user import AdminBootstrapRequest, TokenResponse, UserCreate, UserLogin
+from app.services.cache import cache
+from app.services.private_profile import build_user_out, load_private_profile, upsert_private_profile
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+
+async def _enforce_login_identifier_limit(phone: str) -> None:
+    digest = hashlib.sha256(phone.encode("utf-8")).hexdigest()
+    key = f"auth:login:phone:{digest}"
+    try:
+        attempts = await cache.increment_window(key, ttl_seconds=60)
+    except Exception as exc:
+        logger.warning("Login identifier rate limit unavailable: %s", exc)
+        return
+    if attempts > max(5, settings.RATE_LIMIT_AUTH_PER_MINUTE):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts. Try again shortly.",
+        )
+
+
+@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+async def register(payload: UserCreate, db: AsyncSession = Depends(get_db)):
+    existing_phone = await db.execute(select(User).where(User.phone == payload.phone))
+    if existing_phone.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="Phone already registered")
+    if payload.email:
+        existing_email = await db.execute(select(User).where(User.email == payload.email))
+        if existing_email.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="Email already registered")
+
+    user = User(
+        name=payload.name,
+        phone=payload.phone,
+        email=str(payload.email) if payload.email else None,
+        hashed_password=get_password_hash(payload.password),
+        preferred_language=payload.preferred_language,
+    )
+    db.add(user)
+    await db.flush()
+    await upsert_private_profile(
+        db,
+        user,
+        {
+            "blood_group": payload.blood_group,
+            "medical_conditions": payload.medical_conditions,
+            "allergies": payload.allergies,
+            "emergency_contacts": [contact.model_dump() for contact in payload.emergency_contacts],
+        },
+    )
+    await db.commit()
+    await db.refresh(user)
+    token = create_access_token({"sub": str(user.id)})
+    private_profile = await load_private_profile(db, user)
+    return TokenResponse(access_token=token, expires_in_minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES, user=build_user_out(user, private_profile))
+
+
+@router.post("/login", response_model=TokenResponse)
+async def login(credentials: UserLogin, db: AsyncSession = Depends(get_db)):
+    phone = credentials.phone.strip().replace(" ", "")
+    await _enforce_login_identifier_limit(phone)
+    result = await db.execute(select(User).where(User.phone == phone, User.is_active.is_(True)))
+    user = result.scalar_one_or_none()
+    if not user or not verify_password(credentials.password, user.hashed_password):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    token = create_access_token({"sub": str(user.id)})
+    private_profile = await load_private_profile(db, user)
+    return TokenResponse(access_token=token, expires_in_minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES, user=build_user_out(user, private_profile))
+
+
+@router.post("/bootstrap-admin")
+async def bootstrap_admin(payload: AdminBootstrapRequest, db: AsyncSession = Depends(get_db)):
+    if not settings.ADMIN_BOOTSTRAP_ENABLED:
+        raise HTTPException(status_code=404, detail="Admin bootstrap is disabled")
+    if not settings.ADMIN_BOOTSTRAP_TOKEN or not secrets.compare_digest(payload.bootstrap_token, settings.ADMIN_BOOTSTRAP_TOKEN):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid bootstrap token")
+
+    existing_admin = await db.execute(select(User.id).where(User.role == "admin", User.is_active.is_(True)).limit(1))
+    if existing_admin.scalar_one_or_none() is not None:
+        raise HTTPException(status_code=409, detail="Admin bootstrap is already closed")
+
+    result = await db.execute(select(User).where(User.phone == payload.phone, User.is_active.is_(True)))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.role = "admin"
+    await db.commit()
+    return {"status": "promoted", "user_id": str(user.id), "role": user.role}
+
+
+@router.get("/mesh-relay-key")
+async def get_mesh_relay_key(current_user: User = Depends(get_current_user)):
+    """Return a per-user HMAC sub-key derived from the master signing key.
+
+    Security contract:
+    - The master MESH_RELAY_SIGNING_KEY is NEVER returned.
+    - Each user gets a unique sub-key: HMAC-SHA256(master_key, user_id).
+    - The backend verifies relay packets by re-deriving from the user_id embedded in the packet.
+    - Flutter stores this in flutter_secure_storage on first login for offline SOS signing.
+    - If MESH_RELAY_SIGNING_KEY is not configured, returns key=null (mesh relay disabled).
+    """
+    if not settings.MESH_RELAY_SIGNING_KEY:
+        return {
+            "key": None,
+            "algorithm": "HMAC-SHA256",
+            "note": "Mesh relay signing not configured on this server.",
+        }
+    master = settings.MESH_RELAY_SIGNING_KEY.encode("utf-8")
+    user_bytes = str(current_user.id).encode("utf-8")
+    derived = _hmac.new(master, user_bytes, hashlib.sha256).hexdigest()
+    return {"key": derived, "algorithm": "HMAC-SHA256"}

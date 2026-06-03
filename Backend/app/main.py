@@ -1,0 +1,173 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+import uuid
+from contextlib import asynccontextmanager
+from typing import Any
+
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from sqlalchemy import text
+from starlette.responses import JSONResponse
+
+from app import models  # noqa: F401
+from app.api import auth, dashboard, data_ingestion, feedback, helper, rag_admin, services, sos, user, volunteer, bundle, relay, voice
+from app.core.config import settings
+from app.db.session import AsyncSessionLocal, engine
+from app.services.cache import cache
+from app.services import escalation as _escalation  # noqa: F401 - registers durable queue handler
+from app.services import overpass as _overpass # noqa: F401 - registers overpass queue handler
+from app.services import supergraph as _supergraph # noqa: F401 - registers mci_dbscan queue handler
+from app.services.db_ping import ping_db_forever
+from app.services.event_bus import event_bus
+from app.services.notifications import notification_hub
+
+from app.services.rate_limiter import RateLimitMiddleware
+from app.services.task_queue import task_queue
+
+logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
+logger = logging.getLogger(__name__)
+
+
+def _scrub_validation_errors(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _scrub_validation_errors(item) for key, item in value.items() if key != "input"}
+    if isinstance(value, list):
+        return [_scrub_validation_errors(item) for item in value]
+    return value
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    settings.validate_startup_configuration()
+    async with AsyncSessionLocal() as db:
+        await db.execute(text("SELECT 1"))
+    ping_task = asyncio.create_task(ping_db_forever(), name="db-ping")
+    worker_task = asyncio.create_task(task_queue.run_worker_forever(), name="task-worker")
+    yield
+    # Shutdown: close shared httpx client in notification hub.
+    await notification_hub.close()
+    await task_queue.stop()
+    ping_task.cancel()
+    worker_task.cancel()
+    await asyncio.gather(ping_task, worker_task, return_exceptions=True)
+    await engine.dispose()
+
+
+app = FastAPI(
+    title=settings.APP_NAME,
+    description="Scalable FastAPI backend for RoadSoS: Offline-First Golden Hour Rescue Engine.",
+    version=settings.API_VERSION,
+    lifespan=lifespan,
+)
+
+MAX_BODY_SIZE = max(settings.MAX_UPLOAD_BYTES + 64 * 1024, 1 * 1024 * 1024)
+
+
+# ---------------------------------------------------------------------------
+# Request-ID middleware — injects a correlation ID into every request/response
+# so SOS → escalation → notification log entries can be traced end-to-end.
+# ---------------------------------------------------------------------------
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+    response.headers.setdefault("Cache-Control", "no-store")
+    if settings.is_production:
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
+
+
+@app.middleware("http")
+async def limit_request_body(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            length = int(content_length)
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length"})
+        if length > MAX_BODY_SIZE:
+            return JSONResponse(status_code=413, content={"detail": "Request body too large"})
+    return await call_next(request)
+
+
+if settings.ALLOWED_HOSTS != ["*"]:
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.ALLOWED_HOSTS)
+app.add_middleware(RateLimitMiddleware)
+# GZip: minimum_size=500 keeps health/small responses uncompressed.
+# Halves /emergency/bundle payload — critical for 2G users (~50 kbps).
+app.add_middleware(GZipMiddleware, minimum_size=500)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With", "X-Request-ID"],
+)
+
+
+# ---------------------------------------------------------------------------
+# Global exception handlers — structured error responses, no stack traces leaked
+# ---------------------------------------------------------------------------
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={"detail": jsonable_encoder(_scrub_validation_errors(exc.errors()))},
+    )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger.exception("Unhandled error [request_id=%s]: %s", request_id, exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error", "request_id": request_id},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Routers
+# ---------------------------------------------------------------------------
+app.include_router(auth.router, prefix="/auth", tags=["Auth"])
+app.include_router(user.router, prefix="/users", tags=["Users"])
+app.include_router(volunteer.router, prefix="/volunteers", tags=["Volunteers"])
+app.include_router(sos.router, prefix="/sos", tags=["SOS"])
+app.include_router(bundle.router, prefix="/emergency", tags=["Golden Hour Engine"])
+app.include_router(relay.router, prefix="/emergency", tags=["Mesh Relay"])
+app.include_router(voice.router, prefix="/emergency", tags=["Voice SOS"])
+app.include_router(helper.router, prefix="/helper", tags=["Helper Bot RAG"])
+app.include_router(feedback.router, prefix="/feedback", tags=["Feedback"])
+app.include_router(services.router, prefix="/services", tags=["Emergency Services"])
+app.include_router(rag_admin.router, prefix="/rag", tags=["RAG Admin"])
+app.include_router(dashboard.router, prefix="/dashboard", tags=["Judge Dashboard"])
+app.include_router(data_ingestion.router, prefix="/data-ingestion", tags=["Multi-source Data Ingestion"])
+
+
+# ---------------------------------------------------------------------------
+# Health endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "version": settings.API_VERSION, "environment": settings.ENVIRONMENT}
