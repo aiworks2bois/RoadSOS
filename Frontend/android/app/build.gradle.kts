@@ -3,9 +3,6 @@ plugins {
     id("kotlin-android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
-    // Gap 4: Firebase — requires google-services.json in android/app/
-    // Download from Firebase Console -> Project Settings -> Android app.
-    id("com.google.gms.google-services")
 }
 
 android {
@@ -55,4 +52,10 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
+}
+
+// Gap 4: Firebase — conditionally apply google-services if config exists.
+// Prevents CI from failing when the gitignored google-services.json is missing.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
 }
