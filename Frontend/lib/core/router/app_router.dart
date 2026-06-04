@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../domain/providers/auth_provider.dart';
 import '../../presentation/screens/auth/login_screen.dart';
 import '../../presentation/screens/sos/main_sos_screen.dart';
 import '../../presentation/screens/sos/golden_hour_bundle_screen.dart';
@@ -170,11 +172,134 @@ final appRouter = GoRouter(
 // ── Placeholder screen stubs ──────────────────────────────────────────────────
 // Each is replaced by its full implementation in the feature files.
 
-class SplashScreen extends StatelessWidget {
+class SplashScreen extends ConsumerStatefulWidget {
   const SplashScreen({super.key});
   @override
-  Widget build(BuildContext context) =>
-      const Scaffold(body: Center(child: CircularProgressIndicator()));
+  ConsumerState<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends ConsumerState<SplashScreen>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _scaleAnim;
+  late final Animation<double> _fadeAnim;
+  bool _navigated = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    );
+    _scaleAnim = CurvedAnimation(parent: _controller, curve: Curves.elasticOut);
+    _fadeAnim = CurvedAnimation(parent: _controller, curve: Curves.easeIn);
+    _controller.forward();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _navigate(bool isAuthenticated) {
+    if (_navigated) return;
+    _navigated = true;
+    Future.delayed(const Duration(milliseconds: 400), () {
+      if (!mounted) return;
+      if (isAuthenticated) {
+        context.go(Routes.sosTrigger);
+      } else {
+        context.go(Routes.login);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Watch auth state; redirect once it's resolved (isLoading == false).
+    ref.listen<AuthState>(authNotifierProvider, (prev, next) {
+      if (!next.isLoading) {
+        _navigate(next.isAuthenticated);
+      }
+    });
+
+    // Also check immediately in case build() fires after auth is already resolved.
+    final authState = ref.watch(authNotifierProvider);
+    if (!authState.isLoading && !_navigated) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _navigate(authState.isAuthenticated);
+      });
+    }
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF0A0C10),
+      body: Center(
+        child: FadeTransition(
+          opacity: _fadeAnim,
+          child: ScaleTransition(
+            scale: _scaleAnim,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // SOS icon with red glow
+                Container(
+                  width: 100,
+                  height: 100,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xFF1E2330),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFFFF2D2D).withValues(alpha: 0.4),
+                        blurRadius: 32,
+                        spreadRadius: 8,
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.emergency,
+                    color: Color(0xFFFF2D2D),
+                    size: 56,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                const Text(
+                  'RoadSoS',
+                  style: TextStyle(
+                    fontFamily: 'Outfit',
+                    fontSize: 40,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFFEEF0F5),
+                    letterSpacing: 2,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Emergency Response, Fast.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Color(0xFF8A90A0),
+                    letterSpacing: 1,
+                  ),
+                ),
+                const SizedBox(height: 48),
+                const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    color: Color(0xFFFF2D2D),
+                    strokeWidth: 2.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class OnboardingScreen extends StatelessWidget {
