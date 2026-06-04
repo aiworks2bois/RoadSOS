@@ -105,10 +105,58 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+  build_windows:
+    name: Build Windows
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: Frontend
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐦 Setup Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: 🖥️ Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: 📦 Restore pub cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\Pub\Cache
+            Frontend\.dart_tool
+          key: pub-${{ runner.os }}-${{ hashFiles('Frontend/pubspec.yaml') }}
+          restore-keys: pub-${{ runner.os }}-
+
+      - name: 📦 flutter pub get
+        run: flutter pub get
+
+      - name: ⚙️ Run build_runner (code generation)
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: 🏗️ Build Windows Release
+        run: flutter build windows --release
+
+      - name: 🗜️ Zip Windows build
+        run: Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath RoadSoS-Windows.zip
+
+      - name: 📤 Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RoadSoS-Windows-${{ github.sha }}
+          path: Frontend/RoadSoS-Windows.zip
+          retention-days: 30
+
   # ── GitHub Release (only on version tags like v1.0.0) ─────────────────────
   release:
     name: 🎉 Create GitHub Release
-    needs: build_apk
+    needs: [build_apk, build_windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
@@ -119,8 +167,16 @@ jobs:
           name: RoadSoS-APK-${{ github.sha }}
           path: apks/
 
+      - name: 📥 Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: RoadSoS-Windows-${{ github.sha }}
+          path: win/
+
       - name: 📋 List downloaded files
-        run: ls -lh apks/
+        run: |
+          ls -lh apks/
+          ls -lh win/
 
       - name: 🚀 Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -130,17 +186,24 @@ jobs:
             ## 🚑 RoadSoS ${{ github.ref_name }}
 
             ### Downloads
-            | APK | Architecture | Use for |
-            |-----|-------------|---------|
-            | `app-arm64-v8a-release.apk` | arm64-v8a | Modern Android phones (2018+) ✅ Recommended |
-            | `app-armeabi-v7a-release.apk` | armeabi-v7a | Older 32-bit Android devices |
-            | `app-x86_64-release.apk` | x86_64 | Android emulators |
-            | `app-release.apk` | Universal | All devices (largest file) |
+            | Package | Platform | Use for |
+            |---------|----------|---------|
+            | `app-arm64-v8a-release.apk` | Android | Modern Android phones (2018+) ✅ Recommended |
+            | `app-armeabi-v7a-release.apk` | Android | Older 32-bit Android devices |
+            | `app-x86_64-release.apk` | Android | Android emulators |
+            | `app-release.apk` | Android | All devices (largest file) |
+            | `RoadSoS-Windows.zip` | Windows | Desktop Windows 10/11 |
 
             ### Install
+            **Android**:
             1. Download the APK for your device
             2. Enable **Install unknown apps** in Android Settings
             3. Open the APK to install
+
+            **Windows**:
+            1. Download `RoadSoS-Windows.zip`
+            2. Extract to a folder
+            3. Run `roadsos.exe`
 
             ---
             Built from commit ${{ github.sha }}
@@ -149,6 +212,7 @@ jobs:
             apks/app-arm64-v8a-release.apk
             apks/app-armeabi-v7a-release.apk
             apks/app-x86_64-release.apk
+            win/RoadSoS-Windows.zip
           draft: false
           prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
           token: ${{ secrets.GITHUB_TOKEN }}
