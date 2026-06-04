@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/color_tokens.dart';
 import '../../../domain/providers/auth_provider.dart';
+import '../../../core/router/app_router.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -26,7 +27,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         );
       }
       if (next.isAuthenticated) {
-        context.go('/sos');
+            context.go(Routes.sosTrigger);
       }
     });
 
