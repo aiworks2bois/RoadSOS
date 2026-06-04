@@ -117,7 +117,7 @@ app.add_middleware(RateLimitMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=500)
 cors_kwargs = {
     "allow_methods": ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    "allow_headers": ["Authorization", "Content-Type", "X-Requested-With", "X-Request-ID"],
+    "allow_headers": ["Authorization", "Content-Type", "X-Requested-With", "X-Request-ID", "X-App-Version"],
 }
 if "*" in settings.CORS_ORIGINS:
     cors_kwargs["allow_origins"] = ["*"]
