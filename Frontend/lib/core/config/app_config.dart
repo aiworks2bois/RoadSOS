@@ -51,8 +51,9 @@ class AppConfig {
           flavor: AppFlavor.dev,
           // Android emulator maps 10.0.2.2 → host localhost.
           // For real device on same network, use your machine's LAN IP instead.
-          baseUrl: 'http://10.0.2.2:8000',
-          wsBaseUrl: 'ws://10.0.2.2:8000',
+          // Use 127.0.0.1 for Windows/Web testing. If testing on Android emulator, change to 10.0.2.2.
+          baseUrl: 'http://127.0.0.1:8002',
+          wsBaseUrl: 'ws://127.0.0.1:8002',
         ),
     };
   }

@@ -140,7 +140,10 @@ class Settings(BaseSettings):
             url = url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
         else:
             url = url.replace("postgresql://", "postgresql+psycopg://", 1)
-        # psycopg uses "sslmode" instead of asyncpg's "ssl"
+        # asyncpg uses "ssl=require" but psycopg uses "sslmode=require".
+        # Strip asyncpg-specific ssl=disable (not valid for psycopg) and
+        # translate ssl=require to sslmode=require.
+        url = url.replace("?ssl=disable", "").replace("&ssl=disable", "")
         url = url.replace("?ssl=require", "?sslmode=require")
         url = url.replace("&ssl=require", "&sslmode=require")
         return url
