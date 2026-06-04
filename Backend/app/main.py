@@ -115,13 +115,19 @@ app.add_middleware(RateLimitMiddleware)
 # GZip: minimum_size=500 keeps health/small responses uncompressed.
 # Halves /emergency/bundle payload — critical for 2G users (~50 kbps).
 app.add_middleware(GZipMiddleware, minimum_size=500)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Requested-With", "X-Request-ID"],
-)
+cors_kwargs = {
+    "allow_methods": ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    "allow_headers": ["Authorization", "Content-Type", "X-Requested-With", "X-Request-ID"],
+}
+if "*" in settings.CORS_ORIGINS:
+    cors_kwargs["allow_origins"] = ["*"]
+    cors_kwargs["allow_credentials"] = False
+else:
+    cors_kwargs["allow_origins"] = settings.CORS_ORIGINS
+    cors_kwargs["allow_credentials"] = True
+    cors_kwargs["allow_origin_regex"] = r"https?://(localhost|127\.0\.0\.1)(:[0-9]+)?$"
+
+app.add_middleware(CORSMiddleware, **cors_kwargs)
 
 
 # ---------------------------------------------------------------------------

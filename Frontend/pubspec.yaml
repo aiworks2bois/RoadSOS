@@ -13,7 +13,6 @@ dependencies:
 
   # ── State Management ──────────────────────────────────────────────────────────
   # hooks_riverpod re-exports flutter_riverpod. Do NOT add flutter_riverpod separately.
-  flutter_riverpod: any
   riverpod: any
   riverpod_annotation: any
   hooks_riverpod: any
