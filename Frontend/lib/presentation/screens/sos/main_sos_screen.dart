@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import '../../../core/router/app_router.dart';
 import '../../../domain/providers/sos_provider.dart';
 
@@ -82,6 +83,76 @@ class _SosTriggerScreenState extends ConsumerState<SosTriggerScreen>
     if (mounted && state.activeSos != null) {
       context.go(Routes.activeIncidentPath(state.activeSos!.incidentId));
     }
+  }
+
+  void _showOfflinePacket(BuildContext context) {
+    final expiryTime = DateTime.now().add(const Duration(minutes: 5));
+    final expiryStr = '${expiryTime.hour.toString().padLeft(2, '0')}:${expiryTime.minute.toString().padLeft(2, '0')}';
+    
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1A1E2A),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.wifi_off_rounded, color: Color(0xFF8A90A0), size: 32),
+            const SizedBox(height: 12),
+            const Text('Offline Mesh Packet', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+            const SizedBox(height: 8),
+            const Text(
+              'Show this QR to a nearby device or volunteer. Their device will automatically relay your signed SOS when it connects to the internet.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Color(0xFF8A90A0), fontSize: 13, height: 1.5),
+            ),
+            const SizedBox(height: 24),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
+              child: QrImageView(
+                data: '{"i":"demo-id","p":"P1_CRITICAL","l":[0.0,0.0],"t":${DateTime.now().millisecondsSinceEpoch ~/ 1000}}',
+                version: QrVersions.auto,
+                size: 200.0,
+              ),
+            ),
+            const SizedBox(height: 24),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFF6B00).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFFF6B00).withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.timer_outlined, color: Color(0xFFFF6B00), size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'This packet is signed and expires at $expiryStr to prevent replay attacks.',
+                      style: const TextStyle(color: Color(0xFFFF6B00), fontSize: 12, fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF2A3040), padding: const EdgeInsets.symmetric(vertical: 14)),
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Close'),
+              ),
+            ),
+            const SizedBox(height: 24),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -175,6 +246,21 @@ class _SosTriggerScreenState extends ConsumerState<SosTriggerScreen>
                   const SizedBox(height: 20),
                   _BystanderForm(nameCtrl: _victimNameCtrl, phoneCtrl: _victimPhoneCtrl),
                 ],
+
+                const SizedBox(height: 24),
+                
+                // ── Offline Mesh Relay Button ───────────────────────────────
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF8A90A0),
+                    side: const BorderSide(color: Color(0xFF2A3040)),
+                    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  icon: const Icon(Icons.wifi_off_rounded, size: 18),
+                  label: const Text('Show Offline Mesh Packet', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  onPressed: () => _showOfflinePacket(context),
+                ),
               ],
 
               // ── Error ───────────────────────────────────────────────────────

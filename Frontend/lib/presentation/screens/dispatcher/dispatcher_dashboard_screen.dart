@@ -7,12 +7,20 @@ import '../../../core/theme/text_styles.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/remote/models/volunteer_models.dart';
 import '../../../domain/providers/volunteer_provider.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 
-class DispatcherDashboardScreen extends ConsumerWidget {
+class DispatcherDashboardScreen extends ConsumerStatefulWidget {
   const DispatcherDashboardScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<DispatcherDashboardScreen> createState() => _DispatcherDashboardScreenState();
+}
+
+class _DispatcherDashboardScreenState extends ConsumerState<DispatcherDashboardScreen> {
+  bool _isMapView = false;
+  @override
+  Widget build(BuildContext context) {
     final metricsAsync = ref.watch(dashboardMetricsProvider);
     final incidentsAsync = ref.watch(activeIncidentsProvider);
 
@@ -23,6 +31,15 @@ class DispatcherDashboardScreen extends ConsumerWidget {
         elevation: 0,
         title: const Text('Dispatcher Dashboard'),
         actions: [
+          IconButton(
+            icon: Icon(_isMapView ? Icons.list : Icons.map),
+            tooltip: _isMapView ? 'List View' : 'Map View',
+            onPressed: () {
+              setState(() {
+                _isMapView = !_isMapView;
+              });
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Refresh',
@@ -38,73 +55,156 @@ class DispatcherDashboardScreen extends ConsumerWidget {
           ref.invalidate(dashboardMetricsProvider);
           ref.invalidate(activeIncidentsProvider);
         },
-        child: CustomScrollView(
-          slivers: [
-            // Metrics strip
-            SliverToBoxAdapter(
-              child: metricsAsync.when(
-                data: (m) => _MetricsStrip(metrics: m),
-                loading: () => const SizedBox(
-                  height: 90,
-                  child: Center(child: CircularProgressIndicator()),
-                ),
-                error: (e, _) => Padding(
-                  padding: const EdgeInsets.all(AppSpacing.md),
-                  child: Text('Metrics unavailable: $e', style: AppTextStyles.bodySmall),
-                ),
-              ),
-            ),
-
-            // Section title
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.md, AppSpacing.md, 4),
-                child: Text('Active Incidents', style: AppTextStyles.heading2),
-              ),
-            ),
-
-            // Incident list
-            incidentsAsync.when(
-              data: (incidents) {
-                if (incidents.isEmpty) {
-                  return SliverFillRemaining(
-                    child: Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.task_alt, size: 72, color: ColorTokens.severityLow),
-                          const SizedBox(height: AppSpacing.md),
-                          Text('All clear — no active incidents', style: AppTextStyles.heading3),
-                        ],
-                      ),
-                    ),
-                  );
-                }
-                return SliverPadding(
-                  padding: const EdgeInsets.all(AppSpacing.md),
-                  sliver: SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (ctx, i) => Padding(
-                        padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                        child: _DispatcherIncidentCard(incident: incidents[i]),
-                      ),
-                      childCount: incidents.length,
-                    ),
-                  ),
-                );
-              },
-              loading: () => const SliverFillRemaining(
-                child: Center(child: CircularProgressIndicator()),
-              ),
-              error: (e, _) => SliverFillRemaining(
-                child: Center(
-                  child: Text('Error: $e', style: AppTextStyles.bodySmall),
-                ),
-              ),
-            ),
-          ],
+        child: incidentsAsync.when(
+          data: (incidents) {
+            if (_isMapView) {
+              return _DispatcherMapView(incidents: incidents);
+            }
+            return _buildListView(metricsAsync, incidents);
+          },
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (e, _) => Center(child: Text('Error: $e', style: AppTextStyles.bodySmall)),
         ),
       ),
+    );
+  }
+
+  Widget _buildListView(AsyncValue<DashboardMetrics> metricsAsync, List<DashboardIncident> incidents) {
+    return CustomScrollView(
+      slivers: [
+        // Metrics strip
+        SliverToBoxAdapter(
+          child: metricsAsync.when(
+            data: (m) => _MetricsStrip(metrics: m),
+            loading: () => const SizedBox(
+              height: 90,
+              child: Center(child: CircularProgressIndicator()),
+            ),
+            error: (e, _) => Padding(
+              padding: const EdgeInsets.all(AppSpacing.md),
+              child: Text('Metrics unavailable: $e', style: AppTextStyles.bodySmall),
+            ),
+          ),
+        ),
+
+        // Section title
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.md, AppSpacing.md, 4),
+            child: Text('Active Incidents', style: AppTextStyles.heading2),
+          ),
+        ),
+
+        // Incident list
+        if (incidents.isEmpty)
+          SliverFillRemaining(
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.task_alt, size: 72, color: ColorTokens.severityLow),
+                  const SizedBox(height: AppSpacing.md),
+                  Text('All clear — no active incidents', style: AppTextStyles.heading3),
+                ],
+              ),
+            ),
+          )
+        else
+          SliverPadding(
+            padding: const EdgeInsets.all(AppSpacing.md),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (ctx, i) => Padding(
+                  padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                  child: _DispatcherIncidentCard(incident: incidents[i]),
+                ),
+                childCount: incidents.length,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+// ── Dispatcher Map View ───────────────────────────────────────────────────────
+
+class _DispatcherMapView extends StatelessWidget {
+  final List<DashboardIncident> incidents;
+  const _DispatcherMapView({required this.incidents});
+
+  Color _severityColor(String priority) {
+    switch (priority) {
+      case 'P1_CRITICAL':
+        return ColorTokens.severityCritical;
+      case 'P2_HIGH':
+        return ColorTokens.severityHigh;
+      case 'P3_MEDIUM':
+        return ColorTokens.severityMedium;
+      default:
+        return ColorTokens.severityLow;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (incidents.isEmpty) {
+      return const Center(
+        child: Text('No active incidents to map', style: TextStyle(color: ColorTokens.textSecondary)),
+      );
+    }
+
+    // Calculate bounds to show all incidents
+    final latLngs = incidents
+        .map((i) => LatLng(i.lat, i.lng))
+        .toList();
+
+    LatLng initialCenter = const LatLng(0, 0);
+    if (latLngs.isNotEmpty) {
+      initialCenter = LatLng(
+        latLngs.map((l) => l.latitude).reduce((a, b) => a + b) / latLngs.length,
+        latLngs.map((l) => l.longitude).reduce((a, b) => a + b) / latLngs.length,
+      );
+    }
+
+    return FlutterMap(
+      options: MapOptions(
+        initialCenter: initialCenter,
+        initialZoom: 12.0,
+      ),
+      children: [
+        TileLayer(
+          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          userAgentPackageName: 'com.roadsos.app',
+        ),
+        MarkerLayer(
+          markers: incidents.map((incident) {
+            final color = _severityColor(incident.priority);
+            return Marker(
+              point: LatLng(incident.lat, incident.lng),
+              width: 50,
+              height: 50,
+              child: GestureDetector(
+                onTap: () => context.push(Routes.dispatcherIncidentPath(incident.id)),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.2),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: color, width: 2),
+                  ),
+                  child: Center(
+                    child: Icon(
+                      incident.isMci ? Icons.warning_amber_rounded : Icons.emergency,
+                      color: color,
+                      size: incident.isMci ? 28 : 22,
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ],
     );
   }
 }

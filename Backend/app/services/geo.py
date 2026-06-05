@@ -53,43 +53,54 @@ async def find_nearby_volunteers(
 
     query = text(
         """
-        SELECT
-          v.id,
-          v.user_id,
-          v.name,
-          v.phone,
-          v.rating,
-          COALESCE(v.skills, ARRAY[]::text[]) AS skills,
-          v.lat,
-          v.lng,
-          (
-            2 * 6371000 * ASIN(SQRT(
-              POWER(SIN(RADIANS(v.lat - :lat) / 2), 2) +
-              COS(RADIANS(:lat)) * COS(RADIANS(v.lat)) *
-              POWER(SIN(RADIANS(v.lng - :lng) / 2), 2)
-            ))
-          ) AS dist_m
-        FROM volunteers v
-        WHERE v.available = true
-          AND v.lat IS NOT NULL
-          AND v.lat BETWEEN :lat_min AND :lat_max
-          AND v.lng BETWEEN :lng_min AND :lng_max
-          AND NOT EXISTS (
-            SELECT 1 FROM incidents i
-            WHERE i.accepted_responder_id = v.id
-              AND i.status IN ('active', 'acknowledged', 'escalated')
-          )
+        WITH ranked_volunteers AS (
+            SELECT
+                v.id,
+                v.user_id,
+                v.name,
+                v.phone,
+                v.rating,
+                COALESCE(v.skills, ARRAY[]::text[]) AS skills,
+                v.lat,
+                v.lng,
+                ST_Distance(
+                    ST_SetSRID(ST_MakePoint(v.lng, v.lat), 4326)::geography,
+                    ST_SetSRID(ST_MakePoint(:lng, :lat), 4326)::geography
+                ) AS dist_m
+            FROM volunteers v
+            WHERE v.available = true
+              AND v.lat IS NOT NULL
+              AND ST_DWithin(
+                  ST_SetSRID(ST_MakePoint(v.lng, v.lat), 4326)::geography,
+                  ST_SetSRID(ST_MakePoint(:lng, :lat), 4326)::geography,
+                  :radius_m
+              )
+        )
+        SELECT 
+            *,
+            (
+                -- Composite Score (higher is better):
+                -- 1. Distance: Up to 50 points for being close (0m = 50, radius_m = 0)
+                GREATEST(0, 50.0 * (1.0 - (dist_m / NULLIF(:radius_m, 0)))) +
+                -- 2. Rating: Up to 30 points (5.0 stars = 30)
+                COALESCE(rating, 4.0) * 6.0 +
+                -- 3. Skills match: +20 points if they have required skills
+                CASE WHEN ARRAY_LENGTH(:req_skills::text[], 1) > 0 AND skills && :req_skills::text[] THEN 20 ELSE 0 END
+            ) AS rank_score
+        FROM ranked_volunteers
+        ORDER BY rank_score DESC, dist_m ASC
+        LIMIT :limit
         """
     )
+    
     result = await db.execute(
         query,
         {
             "lat": lat,
             "lng": lng,
-            "lat_min": lat - lat_delta,
-            "lat_max": lat + lat_delta,
-            "lng_min": lng - lng_delta,
-            "lng_max": lng + lng_delta,
+            "radius_m": radius_meters,
+            "req_skills": required_skills,
+            "limit": limit,
         },
     )
     rows = result.mappings().all()
@@ -98,8 +109,6 @@ async def find_nearby_volunteers(
     volunteers = []
     for row in rows:
         dist_m = float(row["dist_m"])
-        if dist_m > radius_meters:
-            continue
         distance_km = round(dist_m / 1000, 3)
         rating_score = min(max(float(row["rating"]) / 5.0, 0), 1)
         dist_score = max(0.0, 1 - dist_m / radius_meters)

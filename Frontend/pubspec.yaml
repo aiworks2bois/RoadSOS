@@ -82,6 +82,7 @@ dependencies:
   permission_handler: ^11.3.0
   url_launcher: ^6.2.0
   crypto: ^3.0.3
+  qr_flutter: ^4.1.0
 
   # ── Phase 2 additions (commented out — add when Phase 2 work begins) ──────────
   # flutter_sound: ^9.0.0         # Voice SOS full implementation
