@@ -3,10 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../domain/providers/auth_provider.dart';
 import '../../presentation/screens/auth/login_screen.dart';
+import '../../presentation/screens/auth/register_screen.dart';
 import '../../presentation/screens/sos/main_sos_screen.dart';
 import '../../presentation/screens/sos/golden_hour_bundle_screen.dart';
 import '../../presentation/screens/sos/helper_bot_screen.dart';
+import '../../presentation/screens/sos/active_incident_screen.dart';
 import '../../presentation/screens/services_map/services_map_screen.dart';
+import '../../presentation/screens/profile/profile_screen.dart';
 import '../../presentation/screens/volunteer/volunteer_dashboard_screen.dart';
 import '../../presentation/screens/volunteer/volunteer_respond_screen.dart';
 import '../../presentation/screens/dispatcher/dispatcher_dashboard_screen.dart';
@@ -28,12 +31,11 @@ abstract final class Routes {
   static const bundle = '/sos/bundle/:id';
   static const activeIncident = '/sos/active/:id';
   static const offlineSos = '/sos/offline';
-  // v1.1 routes — defined now so deep links work immediately after FCM lands.
+  // v1.1 routes
   static const volunteerDashboard = '/volunteer/dashboard';
   static const volunteerRespond = '/volunteer/incident/:id/respond';
   static const dispatcherDashboard = '/dispatcher/dashboard';
   static const dispatcherIncident = '/dispatcher/incident/:id';
-  // Universal deep-link resolver (role-aware).
   static const incidentDeepLink = '/incidents/:id';
 
   // Helpers to build parameterised paths.
@@ -48,7 +50,7 @@ abstract final class Routes {
 
 final appRouter = GoRouter(
   initialLocation: Routes.splash,
-  debugLogDiagnostics: true, // disable in prod via AppConfig flag
+  debugLogDiagnostics: true,
   redirect: routeGuard,
   routes: [
     // ── Splash ──────────────────────────────────────────────────────────────
@@ -78,29 +80,37 @@ final appRouter = GoRouter(
     ),
 
     // ── Home Shell (role-aware bottom nav) ───────────────────────────────────
-    ShellRoute(
-      builder: (ctx, state, child) => HomeShell(child: child),
-      routes: [
-        GoRoute(
-          path: Routes.sosTrigger,
-          name: 'sos-trigger',
-          builder: (ctx, state) => const SosTriggerScreen(),
-        ),
-        GoRoute(
-          path: Routes.servicesMap,
-          name: 'services-map',
-          builder: (ctx, state) => const ServicesMapScreen(),
-        ),
-        GoRoute(
-          path: Routes.helperBot,
-          name: 'helper-bot',
-          builder: (ctx, state) => const HelperBotScreen(),
-        ),
-        GoRoute(
-          path: Routes.profile,
-          name: 'profile',
-          builder: (ctx, state) => const ProfileScreen(),
-        ),
+    StatefulShellRoute.indexedStack(
+      builder: (ctx, state, shell) => HomeShell(navigationShell: shell),
+      branches: [
+        StatefulShellBranch(routes: [
+          GoRoute(
+            path: Routes.sosTrigger,
+            name: 'sos-trigger',
+            builder: (ctx, state) => const SosTriggerScreen(),
+          ),
+        ]),
+        StatefulShellBranch(routes: [
+          GoRoute(
+            path: Routes.servicesMap,
+            name: 'services-map',
+            builder: (ctx, state) => const ServicesMapScreen(),
+          ),
+        ]),
+        StatefulShellBranch(routes: [
+          GoRoute(
+            path: Routes.helperBot,
+            name: 'helper-bot',
+            builder: (ctx, state) => const HelperBotScreen(),
+          ),
+        ]),
+        StatefulShellBranch(routes: [
+          GoRoute(
+            path: Routes.profile,
+            name: 'profile',
+            builder: (ctx, state) => const ProfileScreen(),
+          ),
+        ]),
       ],
     ),
 
@@ -154,14 +164,9 @@ final appRouter = GoRouter(
     ),
 
     // ── Deep Link Resolver (FCM notifications) ───────────────────────────────
-    // Role-aware: user → active incident, volunteer → respond, dispatcher → detail
     GoRoute(
       path: Routes.incidentDeepLink,
       name: 'incident-deep-link',
-      redirect: (ctx, state) {
-        // Role resolution is handled in route_guards.dart based on AuthState.
-        return null; // Resolved in routeGuard.
-      },
       builder: (ctx, state) => IncidentDeepLinkResolver(
         incidentId: state.pathParameters['id']!,
       ),
@@ -169,8 +174,113 @@ final appRouter = GoRouter(
   ],
 );
 
+// ── Home Shell with Bottom Navigation ────────────────────────────────────────
+
+class HomeShell extends StatelessWidget {
+  final StatefulNavigationShell navigationShell;
+  const HomeShell({super.key, required this.navigationShell});
+
+  static const _tabs = [
+    _TabItem(icon: Icons.emergency, activeIcon: Icons.emergency, label: 'SOS'),
+    _TabItem(icon: Icons.map_outlined, activeIcon: Icons.map, label: 'Map'),
+    _TabItem(icon: Icons.smart_toy_outlined, activeIcon: Icons.smart_toy, label: 'Helper'),
+    _TabItem(icon: Icons.person_outline, activeIcon: Icons.person, label: 'Profile'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0A0C10),
+      body: navigationShell,
+      bottomNavigationBar: _RoadSosBottomBar(
+        selectedIndex: navigationShell.currentIndex,
+        tabs: _tabs,
+        onTap: (i) => navigationShell.goBranch(i, initialLocation: i == navigationShell.currentIndex),
+      ),
+    );
+  }
+}
+
+class _TabItem {
+  final IconData icon;
+  final IconData activeIcon;
+  final String label;
+  const _TabItem({required this.icon, required this.activeIcon, required this.label});
+}
+
+class _RoadSosBottomBar extends StatelessWidget {
+  final int selectedIndex;
+  final List<_TabItem> tabs;
+  final ValueChanged<int> onTap;
+
+  const _RoadSosBottomBar({required this.selectedIndex, required this.tabs, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Color(0xFF0F1219),
+        border: Border(top: BorderSide(color: Color(0xFF1E2330), width: 1)),
+      ),
+      child: SafeArea(
+        child: SizedBox(
+          height: 64,
+          child: Row(
+            children: tabs.asMap().entries.map((e) {
+              final i = e.key;
+              final tab = e.value;
+              final selected = i == selectedIndex;
+              // Highlight SOS tab with red accent
+              final isSos = i == 0;
+              final color = selected
+                  ? (isSos ? const Color(0xFFFF2D2D) : const Color(0xFFEEF0F5))
+                  : const Color(0xFF4A5060);
+
+              return Expanded(
+                child: GestureDetector(
+                  onTap: () => onTap(i),
+                  behavior: HitTestBehavior.opaque,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        // SOS tab: round pill badge when selected
+                        if (isSos && selected)
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFF2D2D).withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Icon(tab.activeIcon, color: color, size: 22),
+                          )
+                        else
+                          Icon(selected ? tab.activeIcon : tab.icon, color: color, size: 22),
+                        const SizedBox(height: 4),
+                        Text(
+                          tab.label,
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
+                            color: color,
+                            letterSpacing: 0.3,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ── Placeholder screen stubs ──────────────────────────────────────────────────
-// Each is replaced by its full implementation in the feature files.
 
 class SplashScreen extends ConsumerStatefulWidget {
   const SplashScreen({super.key});
@@ -188,10 +298,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1000),
-    );
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 1000));
     _scaleAnim = CurvedAnimation(parent: _controller, curve: Curves.elasticOut);
     _fadeAnim = CurvedAnimation(parent: _controller, curve: Curves.easeIn);
     _controller.forward();
@@ -218,19 +325,13 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
 
   @override
   Widget build(BuildContext context) {
-    // Watch auth state; redirect once it's resolved (isLoading == false).
     ref.listen<AuthState>(authNotifierProvider, (prev, next) {
-      if (!next.isLoading) {
-        _navigate(next.isAuthenticated);
-      }
+      if (!next.isLoading) _navigate(next.isAuthenticated);
     });
 
-    // Also check immediately in case build() fires after auth is already resolved.
     final authState = ref.watch(authNotifierProvider);
     if (!authState.isLoading && !_navigated) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _navigate(authState.isAuthenticated);
-      });
+      WidgetsBinding.instance.addPostFrameCallback((_) => _navigate(authState.isAuthenticated));
     }
 
     return Scaffold(
@@ -243,56 +344,21 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // SOS icon with red glow
                 Container(
-                  width: 100,
-                  height: 100,
+                  width: 100, height: 100,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: const Color(0xFF1E2330),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFFFF2D2D).withValues(alpha: 0.4),
-                        blurRadius: 32,
-                        spreadRadius: 8,
-                      ),
-                    ],
+                    boxShadow: [BoxShadow(color: const Color(0xFFFF2D2D).withValues(alpha: 0.4), blurRadius: 32, spreadRadius: 8)],
                   ),
-                  child: const Icon(
-                    Icons.emergency,
-                    color: Color(0xFFFF2D2D),
-                    size: 56,
-                  ),
+                  child: const Icon(Icons.emergency, color: Color(0xFFFF2D2D), size: 56),
                 ),
                 const SizedBox(height: 24),
-                const Text(
-                  'RoadSoS',
-                  style: TextStyle(
-                    fontFamily: 'Outfit',
-                    fontSize: 40,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFFEEF0F5),
-                    letterSpacing: 2,
-                  ),
-                ),
+                const Text('RoadSoS', style: TextStyle(fontFamily: 'Outfit', fontSize: 40, fontWeight: FontWeight.w700, color: Color(0xFFEEF0F5), letterSpacing: 2)),
                 const SizedBox(height: 8),
-                const Text(
-                  'Emergency Response, Fast.',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Color(0xFF8A90A0),
-                    letterSpacing: 1,
-                  ),
-                ),
+                const Text('Emergency Response, Fast.', style: TextStyle(fontSize: 14, color: Color(0xFF8A90A0), letterSpacing: 1)),
                 const SizedBox(height: 48),
-                const SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: CircularProgressIndicator(
-                    color: Color(0xFFFF2D2D),
-                    strokeWidth: 2.5,
-                  ),
-                ),
+                const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Color(0xFFFF2D2D), strokeWidth: 2.5)),
               ],
             ),
           ),
@@ -305,56 +371,40 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
 class OnboardingScreen extends StatelessWidget {
   const OnboardingScreen({super.key});
   @override
-  Widget build(BuildContext context) => const Scaffold(body: Placeholder());
-}
-
-class RegisterScreen extends StatelessWidget {
-  const RegisterScreen({super.key});
-  @override
-  Widget build(BuildContext context) => const Scaffold(body: Placeholder());
-}
-
-class HomeShell extends StatelessWidget {
-  final Widget child;
-  const HomeShell({super.key, required this.child});
-  @override
-  Widget build(BuildContext context) => Scaffold(body: child);
-}
-
-
-class ProfileScreen extends StatelessWidget {
-  const ProfileScreen({super.key});
-  @override
-  Widget build(BuildContext context) => const Scaffold(body: Placeholder());
-}
-
-
-
-class ActiveIncidentScreen extends StatelessWidget {
-  final String incidentId;
-  const ActiveIncidentScreen({super.key, required this.incidentId});
-  @override
-  Widget build(BuildContext context) => const Scaffold(body: Placeholder());
-}
-
-
-@TypedGoRoute<GoldenHourBundleRoute>(path: '/bundle/:incidentId')
-class GoldenHourBundleRoute extends GoRouteData {
-  final String incidentId;
-  const GoldenHourBundleRoute({required this.incidentId});
-  @override
-  Widget build(BuildContext context, GoRouterState state) => GoldenHourBundleScreen(incidentId: incidentId);
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: const Color(0xFF0A0C10),
+    body: Center(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.shield_outlined, color: Color(0xFFFF2D2D), size: 64),
+        const SizedBox(height: 16),
+        const Text('Permissions Required', style: TextStyle(color: Color(0xFFEEF0F5), fontSize: 20, fontWeight: FontWeight.w700, fontFamily: 'Outfit')),
+        const SizedBox(height: 8),
+        const Text('RoadSoS needs Location, Notification,\nand Bluetooth access to save lives.', style: TextStyle(color: Color(0xFF8A90A0)), textAlign: TextAlign.center),
+        const SizedBox(height: 32),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: const Color(0xFFFF2D2D)),
+          onPressed: () => context.go(Routes.login),
+          child: const Text('Grant Permissions & Continue'),
+        ),
+      ]),
+    ),
+  );
 }
 
 class OfflineSosScreen extends StatelessWidget {
   const OfflineSosScreen({super.key});
   @override
-  Widget build(BuildContext context) => const Scaffold(body: Placeholder());
+  Widget build(BuildContext context) => const Scaffold(body: Center(child: Text('Offline SOS Mode', style: TextStyle(color: Colors.white))));
 }
 
 class IncidentDeepLinkResolver extends StatelessWidget {
   final String incidentId;
   const IncidentDeepLinkResolver({super.key, required this.incidentId});
   @override
-  Widget build(BuildContext context) => const Scaffold(body: Placeholder());
+  Widget build(BuildContext context) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.go(Routes.activeIncidentPath(incidentId));
+    });
+    return const Scaffold(body: Center(child: CircularProgressIndicator(color: Color(0xFFFF2D2D))));
+  }
 }

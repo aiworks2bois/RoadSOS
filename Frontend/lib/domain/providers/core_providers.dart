@@ -7,9 +7,11 @@ import '../../core/location/location_service.dart';
 import '../../data/local/database.dart';
 import '../../data/remote/api/auth_api.dart';
 import '../../data/remote/api/sos_api.dart';
+import '../../data/remote/api/user_api.dart';
 import '../../data/remote/api/volunteer_api.dart';
 import '../../data/repositories/auth_repository.dart';
 import '../../data/repositories/sos_repository.dart';
+import '../../data/repositories/user_repository.dart';
 import '../../data/repositories/volunteer_repository.dart';
 
 // Core infrastructure
@@ -52,6 +54,16 @@ final sosRepositoryProvider = Provider<SosRepository>((ref) {
   final queue = ref.watch(offlineQueueProvider);
   final db = ref.watch(appDatabaseProvider);
   return SosRepository(api, queue, db);
+});
+
+final userApiProvider = Provider<UserApi>((ref) {
+  final dio = ref.watch(dioClientProvider);
+  return UserApi(dio);
+});
+
+final userRepositoryProvider = Provider<UserRepository>((ref) {
+  final api = ref.watch(userApiProvider);
+  return UserRepository(api);
 });
 
 final volunteerApiProvider = Provider<VolunteerApi>((ref) {

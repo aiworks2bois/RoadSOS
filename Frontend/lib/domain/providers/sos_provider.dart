@@ -41,6 +41,10 @@ class SosNotifier extends Notifier<SosState> {
     double? lat,
     double? lng,
     String description = 'Emergency SOS triggered',
+    bool silent = false,
+    bool bystanderMode = false,
+    String? victimName,
+    String? victimPhone,
   }) async {
     state = state.copyWith(isTriggering: true, clearError: true);
     try {
@@ -56,6 +60,10 @@ class SosNotifier extends Notifier<SosState> {
         description: description,
         lat: lat,
         lng: lng,
+        silent: silent,
+        bystanderMode: bystanderMode,
+        victimName: victimName,
+        victimPhone: victimPhone,
       ));
       state = state.copyWith(
         isTriggering: false,

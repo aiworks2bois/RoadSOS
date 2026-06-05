@@ -47,6 +47,23 @@ class VolunteerNotifier extends Notifier<VolunteerState> {
     }
   }
 
+  /// Alias for toggle — used by Profile screen.
+  Future<void> setAvailability(bool available) => toggleAvailability(available);
+
+  /// Register as a volunteer (first-time or update).
+  Future<void> register({required String name, required String phone, double lat = 0.0, double lng = 0.0}) async {
+    state = state.copyWith(isLoading: true, clearError: true);
+    try {
+      final repo = ref.read(volunteerRepositoryProvider);
+      final profile = await repo.createOrUpdateProfile(
+        VolunteerCreate(name: name, phone: phone, lat: lat, lng: lng, available: true),
+      );
+      state = state.copyWith(isLoading: false, profile: profile);
+    } catch (e) {
+      state = state.copyWith(isLoading: false, error: e.toString());
+    }
+  }
+
   Future<VolunteerRespondResult?> respond(
     String incidentId, {
     required String action,

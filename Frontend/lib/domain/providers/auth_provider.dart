@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/remote/models/auth_models.dart';
 import 'core_providers.dart';
+import 'user_provider.dart';
 
 class AuthState {
   final bool isLoading;
@@ -56,6 +57,8 @@ class AuthNotifier extends Notifier<AuthState> {
         isAuthenticated: true,
         userSession: response,
       );
+      // Post-login: cache user profile and mesh-relay key
+      _postLoginSetup();
       return true;
     } catch (e) {
       state = state.copyWith(isLoading: false, error: e.toString());
@@ -73,6 +76,8 @@ class AuthNotifier extends Notifier<AuthState> {
         isAuthenticated: true,
         userSession: response,
       );
+      // Post-register: cache user profile and mesh-relay key
+      _postLoginSetup();
       return true;
     } catch (e) {
       state = state.copyWith(isLoading: false, error: e.toString());
@@ -80,9 +85,18 @@ class AuthNotifier extends Notifier<AuthState> {
     }
   }
 
+  void _postLoginSetup() {
+    // Load full user profile into cache
+    ref.read(userProfileProvider.notifier).load();
+    // Pre-cache BLE mesh relay signing key
+    final authApi = ref.read(authApiProvider);
+    authApi.getMeshRelayKey().catchError((_) => null);
+  }
+
   Future<void> logout() async {
     final repo = ref.read(authRepositoryProvider);
     await repo.logout();
+    ref.read(userProfileProvider.notifier).clear();
     state = const AuthState();
   }
 }
